@@ -1,0 +1,8 @@
+# Repositories that make up your project. Copy to `config/repos.list`
+# (gitignored) and list one SSH clone URL per line. All repos belong to the same
+# project. Technology (Laravel / Next.js) is auto-detected after cloning.
+#
+# Lines starting with # and blank lines are ignored.
+#
+# git@github.com:you/second-brain-backend.git
+# git@github.com:you/second-brain-frontend.git

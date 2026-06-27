@@ -1,0 +1,10 @@
+# Secrets / per-machine config — never commit.
+.env
+config/repos.list
+config/projects.list
+
+# Per-machine custom image setup (the committed template is custom-setup.example.sh).
+custom-setup.sh
+
+# Local logs if ever written here.
+*.log

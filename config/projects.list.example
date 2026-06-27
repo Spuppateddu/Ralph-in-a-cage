@@ -1,0 +1,8 @@
+# Multiple-projects config. Copy to `config/projects.list` (gitignored) and add
+# one project per line as: <slug> <token>
+# Lines starting with # and blank lines are ignored.
+#
+# Only used when PROJECT_SLUG/PROJECT_TOKEN are empty in .env.
+#
+# my-first-project-ab3x9   abcdef0123456789...token...
+# another-project-qz7k1    fedcba9876543210...token...

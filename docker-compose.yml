@@ -1,0 +1,53 @@
+# Ralph runner stack. Nothing secret lives here — config comes from `.env`
+# (gitignored), and agent logins + the SSH key live in named volumes created by
+# `scripts/setup.sh`, so they persist across restarts and rebuilds.
+#
+#   docker compose build
+#   docker compose up -d
+#   docker compose exec -it runner /scripts/setup.sh   # one-time
+#   docker compose logs -f runner
+
+services:
+  db:
+    image: mysql:8
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-second_brain}
+      MYSQL_USER: ${DB_USERNAME:-sb}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-secret}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-secret}
+    volumes:
+      - dbdata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_PASSWORD:-secret}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  runner:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    # Lets the container reach a backend you run on the host during testing
+    # (PROJECT_API_BASE_URL=http://host.docker.internal:8000).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./config:/config:ro      # repos.list / projects.list (read-only)
+      - claude:/root/.claude     # Claude login (persisted)
+      - codex:/root/.codex       # Codex login (persisted)
+      - ssh:/root/.ssh           # GitHub SSH key (persisted)
+      - workspace:/workspace     # cloned repos + daily branch history
+      - logs:/var/log/ralph
+
+volumes:
+  dbdata:
+  claude:
+  codex:
+  ssh:
+  workspace:
+  logs:
