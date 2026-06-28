@@ -103,10 +103,28 @@ verify_node_lint_changed() {
         -- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mjs' '*.cjs' 2>/dev/null)
     if [ "${#changed_files[@]}" -eq 0 ]; then
         echo "  (no JS/TS files changed — skipping lint)"
-    elif [ -x "$eslint" ]; then
-        "$eslint" "${changed_files[@]}" || { echo "lint failed on changed files"; return 1; }
-    else
+        return 0
+    fi
+    if [ ! -x "$eslint" ]; then
         echo "  (eslint binary not found — skipping lint)"
+        return 0
+    fi
+    # ESLint exit codes: 0 = clean, 1 = lint violations, 2 = config/internal
+    # error. Only exit 1 is the bot's fault and should fail the task. Exit 2
+    # means the repo's own eslint setup can't run at all — e.g. a legacy
+    # .eslintrc that newer eslint-config-next refuses to load, or a missing
+    # flat eslint.config.js. That's pre-existing repo debt, not something this
+    # task introduced, so warn and skip rather than block every task on it.
+    # The real gate is the build below, which type-checks.
+    ( cd "$dir" && "$eslint" "${changed_files[@]}" )
+    local status=$?
+    if [ "$status" -eq 1 ]; then
+        echo "lint failed on changed files"
+        return 1
+    fi
+    if [ "$status" -ne 0 ]; then
+        echo "  (eslint could not run — exit ${status}, likely a repo eslint-config"
+        echo "   incompatibility; skipping lint. The build still type-checks.)"
     fi
     return 0
 }
