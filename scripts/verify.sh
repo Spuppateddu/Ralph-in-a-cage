@@ -127,9 +127,10 @@ verify_nextjs() {
 }
 
 # Convex = a Next.js app using Convex.dev. Verification never contacts a live
-# Convex backend: `convex codegen` is offline (it regenerates convex/_generated/*
-# from the local convex/ functions so tsc/build can resolve the api types). Full
-# `convex deploy`/`dev` need a real deployment and are intentionally skipped.
+# Convex backend. NOTE: `convex codegen` is NOT usable here — the Convex CLI
+# requires a configured CONVEX_DEPLOYMENT and has no offline mode, so we rely on
+# the repo's COMMITTED convex/_generated/* instead (the api/dataModel types the
+# build needs). The real gate is `next build`, which type-checks.
 verify_convex() {
     local dir="$1"
     cd "$dir" || { echo "convex dir missing"; return 1; }
@@ -137,8 +138,12 @@ verify_convex() {
     echo "[verify:convex] npm ci"
     npm ci || { echo "npm ci failed"; return 1; }
 
-    echo "[verify:convex] convex codegen (offline)"
-    npx --no-install convex codegen || { echo "convex codegen failed"; return 1; }
+    # The cage can't regenerate these offline, so they must be committed.
+    if [ ! -f "$dir/convex/_generated/api.d.ts" ]; then
+        echo "convex/_generated is missing — commit it to the repo (the cage can't run"
+        echo "'convex codegen' offline; the build can't resolve convex/_generated/* without it)"
+        return 1
+    fi
 
     # Next.js reads .env.local at build. Use the project's overlay if present,
     # else inject a placeholder so client init at build time doesn't blow up.

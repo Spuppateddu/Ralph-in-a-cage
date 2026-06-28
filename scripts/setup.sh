@@ -114,8 +114,7 @@ for dir in "$WORKSPACE"/*/; do
             ensure_db_schema   # make sure this project's schema exists
             ( cd "$dir" && composer install --no-interaction --prefer-dist --no-progress ) || true
             ( cd "$dir" && php artisan key:generate --force >/dev/null 2>&1 ) || true ;;
-        convex)
-            ( cd "$dir" && npm install && npx --no-install convex codegen ) || true ;;
+        convex)  ( cd "$dir" && npm install ) || true ;;   # relies on committed convex/_generated
         nextjs)  ( cd "$dir" && npm install ) || true ;;
         *)       echo "    (unknown tech — skipping dependency install)" ;;
     esac

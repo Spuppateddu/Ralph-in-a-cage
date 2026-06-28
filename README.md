@@ -30,7 +30,7 @@ Each pass (cron + `flock`, never overlapping) — the interval is yours to set:
 4. **Do it** — the chosen agent edits the repos (it doesn't touch git).
 5. **Verify** — auto-detected per repo: Laravel ⇒ `composer install` + real MySQL
    migrate + `php artisan test`; Next.js ⇒ `npm ci` + lint + build; Convex
-   (Next.js + Convex.dev) ⇒ `npm ci` + `convex codegen` + lint + build.
+   (Next.js + Convex.dev) ⇒ `npm ci` + lint + build (uses committed `convex/_generated`).
 6. **Settle** —
    - ✅ commit to the **day's branch** (`bot/YYYY-MM-DD`, reused all day), push
      over SSH, open one **PR → base branch** per repo, mark the task **done**
@@ -75,12 +75,13 @@ Auto-detected per repo:
 
 - **Laravel** (PHP + Composer) — `composer install` + real MySQL `migrate:fresh` + `php artisan test`.
 - **Next.js** (Node) — `npm ci` + lint (changed files) + `next build`.
-- **Convex** (Next.js + [Convex.dev](https://convex.dev)) — `npm ci` + `npx convex codegen` +
-  lint (changed files) + `next build`. Detected when `package.json` has the `convex`
-  dependency and a `convex/` directory. Verification is **offline**: `convex codegen`
-  regenerates `convex/_generated/*` from the local `convex/` functions so the build can
-  type-check, and a placeholder `NEXT_PUBLIC_CONVEX_URL` is injected — it never contacts a
-  live Convex deployment.
+- **Convex** (Next.js + [Convex.dev](https://convex.dev)) — `npm ci` + lint (changed files)
+  + `next build`. Detected when `package.json` has the `convex` dependency and a `convex/`
+  directory. Verification is **offline** and a placeholder `NEXT_PUBLIC_CONVEX_URL` is
+  injected, so it never contacts a live Convex deployment. The Convex CLI's `codegen` has
+  **no offline mode** (it requires a live `CONVEX_DEPLOYMENT`), so the cage relies on the
+  repo's **committed `convex/_generated/`** for the api/dataModel types `next build` needs —
+  make sure that directory is committed (Convex commits it by default).
 
 Add more by extending `scripts/detect.sh` and `scripts/verify.sh`.
 
