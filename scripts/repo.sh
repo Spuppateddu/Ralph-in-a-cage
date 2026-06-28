@@ -55,10 +55,21 @@ discard_changes() {
 # Commit the working-tree changes on the daily branch (no push). Call this BEFORE
 # verification, so the commit captures only the agent's edits — never the
 # artifacts verification creates later (storage symlink, sqlite test db, caches).
+#
+#   commit_work <dir> <subject> [body]
+#
+# <subject> is the commit's first line (the task title). [body] is the agent's
+# own summary of WHAT it changed and WHY — passed through from process_task. A
+# `git diff --stat` footer is always appended so the commit lists the files it
+# touched even when the agent's summary is thin or absent.
 commit_work() {
-    local dir="$1" message="$2"
+    local dir="$1" subject="$2" body="${3:-}"
     git -C "$dir" add -A
-    git -C "$dir" commit -m "$message"
+    local stat; stat="$(git -C "$dir" diff --cached --stat 2>/dev/null)"
+    local msg="$subject"
+    [ -n "$body" ] && msg+=$'\n\n'"$body"
+    [ -n "$stat" ] && msg+=$'\n\n'"Files changed:"$'\n'"$stat"
+    git -C "$dir" commit -m "$msg"
 }
 
 # Undo the last task commit and drop any artifacts (used when verification fails).

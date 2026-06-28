@@ -74,7 +74,7 @@ load_projects() {
 
 # ---- Build the agent prompt from the cloned repos --------------------------
 build_prompt() {
-    local title="$1" description="$2" dir tech repos_desc=""
+    local title="$1" description="$2" summary_file="$3" dir tech repos_desc=""
     while read -r dir; do
         [ -z "$dir" ] && continue
         tech="$(detect_tech "$dir")"
@@ -89,6 +89,15 @@ Implement the task below by editing files. Follow each repo's existing
 conventions, keep the change minimal and correct, and update or add tests where
 appropriate. Do NOT run git, do NOT commit, do NOT push — only edit files; the
 harness commits and opens a PR.
+
+When you are finished, write a concise summary of the changes you made to this
+exact file path:
+  ${summary_file}
+Use 2-6 short bullet points describing WHAT you changed and WHY — name the key
+files and the purpose of each change (e.g. "- app/Models/User.php: add email
+verification scope"). This text becomes the commit message body, so be clear
+and specific; do not just restate the task title. Write ONLY that one file
+outside the repositories — do not create any other files in the repos.
 
 TASK: ${title}
 
@@ -110,9 +119,9 @@ process_task() {
     local dir
     while read -r dir; do ensure_daily_branch_dir "$dir"; done < <(list_repos)
 
-    local clog; clog="$(mktemp)"
+    local clog summary_file; clog="$(mktemp)"; summary_file="$(mktemp)"
     log "  running ${agent}"
-    run_agent "$agent" "$(build_prompt "$title" "$description")" "$clog" "$WORKSPACE"
+    run_agent "$agent" "$(build_prompt "$title" "$description" "$summary_file")" "$clog" "$WORKSPACE"
     local arc=$?
 
     local changed=()
@@ -126,15 +135,20 @@ process_task() {
         [ "$arc" -ne 0 ] && reason="Agent run failed (exit $arc) with no changes."$'\n\n'"$(tail -n 40 "$clog")"
         log "  no changes -> feedback"
         bot_feedback "$slug" "$token" "$task_id" "$reason" >/dev/null
-        rm -f "$clog"; return 0
+        rm -f "$clog" "$summary_file"; return 0
     fi
+
+    # The agent writes a human summary of its edits to summary_file (see
+    # build_prompt). Use it as the commit body; commit_work appends a diffstat.
+    local summary=""
+    [ -s "$summary_file" ] && summary="$(cat "$summary_file")"
 
     # Commit the agent's edits up front, BEFORE verifying. Verification installs
     # deps and boots the app, which creates artifacts (storage symlink, sqlite
     # test db, caches); committing first guarantees the PR contains only the
     # agent's actual changes, never those artifacts.
     for dir in "${changed[@]}"; do
-        commit_work "$dir" "Task #${task_id}: ${title}"
+        commit_work "$dir" "Task #${task_id}: ${title}" "$summary"
     done
 
     local fail_reason="" vlog
@@ -152,14 +166,14 @@ process_task() {
         log "  verification failed -> discard + feedback"
         for dir in "${changed[@]}"; do revert_last_commit "$dir"; done
         bot_feedback "$slug" "$token" "$task_id" "$fail_reason" >/dev/null
-        rm -f "$clog"; return 0
+        rm -f "$clog" "$summary_file"; return 0
     fi
 
     for dir in "${changed[@]}"; do
         push_open_pr "$dir"
     done
     log "  task #${task_id} done (HTTP $(bot_done "$slug" "$token" "$task_id"))"
-    rm -f "$clog"
+    rm -f "$clog" "$summary_file"
 }
 
 # ---- Main pass -------------------------------------------------------------
