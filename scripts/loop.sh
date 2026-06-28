@@ -18,8 +18,21 @@ source ./agent.sh
 
 API="${PROJECT_API_BASE_URL:-}"
 DEFAULT_AGENT="${DEFAULT_AGENT:-claude}"
+# How many tasks to work in a single pass. 1 (default) = do one task to
+# completion per trigger; 0 = drain all claimable tasks. Combined with the lock
+# below, this guarantees a new task never starts while one is still in progress.
+MAX_TASKS_PER_PASS="${MAX_TASKS_PER_PASS:-1}"
 
 log() { echo "[$(date '+%F %T')] $*"; }
+
+# Single-flight: never run two passes at once — a cron tick, a manual
+# `docker compose exec ... loop.sh`, and the startup pass all share this lock. If
+# one is already running (agent still working a task), the new one just exits.
+exec 9>/tmp/ralph.lock
+if ! flock -n 9; then
+    log "another pass is already running (a task is still in progress); skipping"
+    exit 0
+fi
 
 # ---- Bot API helpers (body + trailing HTTP status) -------------------------
 bot_get_tasks() {
@@ -84,7 +97,7 @@ process_task() {
     log "claiming task #${task_id} (${title}) [agent: ${agent}]"
     if [ "$(bot_claim "$slug" "$token" "$task_id")" != "200" ]; then
         log "  could not claim — already taken; skipping"
-        return 0
+        return 20   # signal: nothing was worked, try the next task
     fi
 
     local dir
@@ -109,6 +122,14 @@ process_task() {
         rm -f "$clog"; return 0
     fi
 
+    # Commit the agent's edits up front, BEFORE verifying. Verification installs
+    # deps and boots the app, which creates artifacts (storage symlink, sqlite
+    # test db, caches); committing first guarantees the PR contains only the
+    # agent's actual changes, never those artifacts.
+    for dir in "${changed[@]}"; do
+        commit_work "$dir" "Task #${task_id}: ${title}"
+    done
+
     local fail_reason="" vlog
     for dir in "${changed[@]}"; do
         log "  verifying $(basename "$dir")"
@@ -122,13 +143,13 @@ process_task() {
 
     if [ -n "$fail_reason" ]; then
         log "  verification failed -> discard + feedback"
-        for dir in "${changed[@]}"; do discard_changes "$dir"; done
+        for dir in "${changed[@]}"; do revert_last_commit "$dir"; done
         bot_feedback "$slug" "$token" "$task_id" "$fail_reason" >/dev/null
         rm -f "$clog"; return 0
     fi
 
     for dir in "${changed[@]}"; do
-        commit_push_pr "$dir" "Task #${task_id}: ${title}"
+        push_open_pr "$dir"
     done
     log "  task #${task_id} done (HTTP $(bot_done "$slug" "$token" "$task_id"))"
     rm -f "$clog"
@@ -149,6 +170,8 @@ main() {
 
     local projects; projects="$(load_projects)"
     [ -z "$projects" ] && { log "no projects configured; nothing to do"; exit 0; }
+
+    local processed=0
 
     while read -r slug token agent; do
         [ -z "$slug" ] && continue
@@ -174,7 +197,15 @@ main() {
             [ -z "$task_id" ] && continue
             title="$(echo "$body" | jq -r ".tasks[] | select(.id==${task_id}) | .title")"
             description="$(echo "$body" | jq -r ".tasks[] | select(.id==${task_id}) | (.description // \"\")")"
-            process_task "$slug" "$token" "$agent" "$task_id" "$title" "$description"
+            # process_task returns 20 when it couldn't claim (skip, try next);
+            # any other return means it actually worked a task.
+            if process_task "$slug" "$token" "$agent" "$task_id" "$title" "$description"; then
+                processed=$((processed + 1))
+                if [ "$MAX_TASKS_PER_PASS" -gt 0 ] && [ "$processed" -ge "$MAX_TASKS_PER_PASS" ]; then
+                    log "reached MAX_TASKS_PER_PASS=${MAX_TASKS_PER_PASS}; ending pass"
+                    break 2
+                fi
+            fi
         done < <(echo "$body" | jq -r '.tasks[].id')
     done <<< "$projects"
 

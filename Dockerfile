@@ -17,10 +17,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 
-# --- PHP 8.3 + Laravel extensions + Composer (Laravel support) --------------
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        php8.3-cli php8.3-mbstring php8.3-xml php8.3-bcmath php8.3-intl \
-        php8.3-zip php8.3-curl php8.3-mysql php8.3-gd php8.3-sqlite3 \
+# --- PHP + Laravel extensions + Composer (Laravel support) ------------------
+# PHP comes from the ondrej/php PPA so any version is available. Default 8.4
+# (current stable; covers projects whose composer.lock needs >=8.4). Override for
+# an older project with:  docker compose build --build-arg PHP_VERSION=8.3
+ARG PHP_VERSION=8.4
+RUN add-apt-repository -y ppa:ondrej/php \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        php${PHP_VERSION}-cli php${PHP_VERSION}-mbstring php${PHP_VERSION}-xml \
+        php${PHP_VERSION}-bcmath php${PHP_VERSION}-intl php${PHP_VERSION}-zip \
+        php${PHP_VERSION}-curl php${PHP_VERSION}-mysql php${PHP_VERSION}-gd \
+        php${PHP_VERSION}-sqlite3 \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://getcomposer.org/installer | php -- \
         --install-dir=/usr/local/bin --filename=composer

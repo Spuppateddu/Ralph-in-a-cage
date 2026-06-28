@@ -3,8 +3,32 @@
 config/repos.list
 config/projects.list
 
+# Per-repo env files copied into each checkout before install (hold app secrets
+# like APP_KEY / VAPID). Committed templates end in .example; README is kept.
+config/env/*
+!config/env/*.example
+!config/env/README.md
+
 # Per-machine custom image setup (the committed template is custom-setup.example.sh).
 custom-setup.sh
 
 # Local logs if ever written here.
 *.log
+
+# Extra local env files (the committed template is .env.example).
+.env.local
+.env.*.local
+
+# Defensive: never commit keys accidentally dropped in this folder
+# (the real SSH key lives in a Docker volume, not here).
+*.pem
+id_ed25519
+id_ed25519.pub
+id_rsa
+id_rsa.pub
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

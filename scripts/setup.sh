@@ -7,13 +7,14 @@
 # Does the things that need you in the loop, persisting them to Docker volumes so
 # you only do this once per machine:
 #   1. SSH key for GitHub (generate + show the public key to add to GitHub)
-#   2. Log in to Claude Code (Pro/Max) and OpenAI Codex
+#   2. Log in to a chosen coding agent (Claude Code and/or OpenAI Codex)
 #   3. Clone the project repos from /config/repos.list
 #   4. Install each repo's toolchain (Laravel/Next.js, auto-detected)
 #
 set -uo pipefail
 
 source /scripts/detect.sh
+source /scripts/verify.sh   # for provision_laravel_env
 WORKSPACE="${WORKSPACE:-/workspace}"
 SSH_KEY="/root/.ssh/id_ed25519"
 
@@ -42,16 +43,39 @@ ssh -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 | grep -i "succes
     && echo "SSH OK." || echo "(If you didn't see 'successfully authenticated', re-check the key on GitHub.)"
 
 # --- 2. Agent logins --------------------------------------------------------
-hr; echo "2) Agent logins (persisted to volumes)"
+hr; echo "2) Agent login (persisted to volumes)"
 echo
-echo ">>> Claude Code: the TUI will open. Type '/login', complete sign-in (Pro/Max),"
-echo "    then '/exit' to return here."
-pause "Press Enter to launch Claude... "
-claude || true
-echo
-echo ">>> OpenAI Codex: follow the prompts to sign in to your ChatGPT plan."
-pause "Press Enter to launch Codex login... "
-codex login || true
+echo "Which coding agent do you want to log in to?"
+echo "  1) Claude Code   (Pro/Max)"
+echo "  2) OpenAI Codex  (ChatGPT plan)"
+echo "  3) Both"
+# Default to whatever DEFAULT_AGENT is set to in .env (claude -> 1, codex -> 2).
+default_choice=1
+[ "${DEFAULT_AGENT:-claude}" = "codex" ] && default_choice=2
+read -rp "Choose [1/2/3] (default ${default_choice}): " agent_choice
+agent_choice="${agent_choice:-$default_choice}"
+
+login_claude() {
+    echo
+    echo ">>> Claude Code: the TUI will open. Type '/login', complete sign-in (Pro/Max),"
+    echo "    then '/exit' to return here."
+    pause "Press Enter to launch Claude... "
+    claude || true
+}
+login_codex() {
+    echo
+    echo ">>> OpenAI Codex: follow the prompts to sign in to your ChatGPT plan."
+    pause "Press Enter to launch Codex login... "
+    codex login || true
+}
+
+case "$agent_choice" in
+    1) login_claude ;;
+    2) login_codex ;;
+    3) login_claude; login_codex ;;
+    *) echo "Unrecognized choice '$agent_choice' — skipping agent login."
+       echo "Re-run this script to log in later." ;;
+esac
 
 # --- 3. Clone repos ---------------------------------------------------------
 hr; echo "3) Cloning repos"
@@ -80,7 +104,11 @@ for dir in "$WORKSPACE"/*/; do
     tech="$(detect_tech "$dir")"
     echo "  $(basename "$dir") -> ${tech}"
     case "$tech" in
-        laravel) ( cd "$dir" && composer install --no-interaction --prefer-dist --no-progress ) || true ;;
+        laravel)
+            # Provide .env first so the app can boot during install (see verify.sh).
+            provision_laravel_env "$dir"
+            ( cd "$dir" && composer install --no-interaction --prefer-dist --no-progress ) || true
+            ( cd "$dir" && php artisan key:generate --force >/dev/null 2>&1 ) || true ;;
         nextjs)  ( cd "$dir" && npm install ) || true ;;
         *)       echo "    (unknown tech — skipping dependency install)" ;;
     esac

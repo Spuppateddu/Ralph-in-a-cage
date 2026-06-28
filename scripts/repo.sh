@@ -17,12 +17,16 @@ list_repos() {
     done
 }
 
-# Hard-reset a repo to the latest base branch.
+# Hard-reset a repo to the latest base branch, and drop any stray untracked files
+# (e.g. build/verify artifacts left by a previous pass — a storage symlink, a
+# sqlite test db, caches). `clean -fd` leaves gitignored deps (vendor/,
+# node_modules/) in place, so we don't reinstall every pass.
 sync_repo_dir() {
     local dir="$1"
     git -C "$dir" fetch --prune origin
     git -C "$dir" checkout "$BASE_BRANCH"
     git -C "$dir" reset --hard "origin/${BASE_BRANCH}"
+    git -C "$dir" clean -fd
     echo "[repo:$(basename "$dir")] synced to origin/${BASE_BRANCH}"
 }
 
@@ -48,13 +52,28 @@ discard_changes() {
     git -C "$1" clean -fd >/dev/null 2>&1 || true
 }
 
-# Commit current changes on the daily branch, push over SSH, ensure a PR exists.
-commit_push_pr() {
-    local dir="$1" message="$2" branch
-    branch="$(daily_branch)"
-
+# Commit the working-tree changes on the daily branch (no push). Call this BEFORE
+# verification, so the commit captures only the agent's edits — never the
+# artifacts verification creates later (storage symlink, sqlite test db, caches).
+commit_work() {
+    local dir="$1" message="$2"
     git -C "$dir" add -A
     git -C "$dir" commit -m "$message"
+}
+
+# Undo the last task commit and drop any artifacts (used when verification fails).
+revert_last_commit() {
+    local dir="$1"
+    git -C "$dir" reset --hard HEAD~1 >/dev/null 2>&1 || true
+    git -C "$dir" clean -fd >/dev/null 2>&1 || true
+}
+
+# Push the daily branch over SSH and ensure a PR exists. Call AFTER a successful
+# verify. Stages nothing — the commit already happened in commit_work().
+push_open_pr() {
+    local dir="$1" branch
+    branch="$(daily_branch)"
+
     git -C "$dir" push -u origin "$branch"
     echo "[repo:$(basename "$dir")] pushed to $branch"
 

@@ -11,6 +11,12 @@ CLAUDE_TIMEOUT="${CLAUDE_TIMEOUT:-1800}"
 run_agent() {
     local agent="$1" prompt="$2" logfile="$3" workdir="$4"
 
+    # The container runs as root, and both agents refuse their "skip
+    # permissions / bypass sandbox" flags as root unless they can tell they're
+    # sandboxed. IS_SANDBOX=1 is that signal — correct here, the container IS the
+    # cage. Without it the agent exits immediately and does nothing.
+    export IS_SANDBOX=1
+
     case "$agent" in
         claude)
             ( cd "$workdir" && timeout "$CLAUDE_TIMEOUT" \

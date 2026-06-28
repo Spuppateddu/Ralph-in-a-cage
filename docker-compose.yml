@@ -27,6 +27,10 @@ services:
   runner:
     build:
       context: .
+      args:
+        # PHP version for Laravel repos; override in .env if a project needs an
+        # older one (e.g. PHP_VERSION=8.3). Default matches the Dockerfile.
+        PHP_VERSION: ${PHP_VERSION:-8.4}
     restart: unless-stopped
     env_file: .env
     depends_on:

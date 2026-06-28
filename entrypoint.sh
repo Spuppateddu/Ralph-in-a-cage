@@ -29,17 +29,20 @@ fi
 printenv | grep -vE '^(PWD|SHLVL|_|HOME)=' | sed 's/^/export /' > /scripts/runtime.env
 chmod 600 /scripts/runtime.env
 
-# --- Schedule the loop every 5 minutes (flock prevents overlap) -------------
+# --- Schedule the loop ------------------------------------------------------
+# Frequency is configurable: CHECK_INTERVAL_MINUTES (default 5), or a full
+# CRON_SCHEDULE for anything cron can express (e.g. "0 * * * *" hourly).
+# loop.sh self-locks, so overlapping triggers never run two passes at once.
+CRON_SCHEDULE="${CRON_SCHEDULE:-*/${CHECK_INTERVAL_MINUTES:-5} * * * *}"
 mkdir -p /var/log/ralph
-cat > /etc/cron.d/ralph <<'CRON'
-*/5 * * * * root flock -n /tmp/ralph.lock /scripts/loop.sh >> /var/log/ralph/loop.log 2>&1
+cat > /etc/cron.d/ralph <<CRON
+${CRON_SCHEDULE} root /scripts/loop.sh >> /var/log/ralph/loop.log 2>&1
 CRON
 chmod 0644 /etc/cron.d/ralph
-crontab /etc/cron.d/ralph
-echo "[entrypoint] scheduled loop every 5 minutes"
+echo "[entrypoint] scheduled loop: '${CRON_SCHEDULE}'"
 
 # First pass immediately (no-op until setup.sh has cloned repos).
-flock -n /tmp/ralph.lock /scripts/loop.sh >> /var/log/ralph/loop.log 2>&1 || true
+/scripts/loop.sh >> /var/log/ralph/loop.log 2>&1 || true
 
 touch /var/log/ralph/loop.log
 tail -F /var/log/ralph/loop.log &

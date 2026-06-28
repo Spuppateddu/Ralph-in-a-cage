@@ -1,5 +1,9 @@
 # Ralph in a Cage 🦖🔒
 
+<p align="center">
+  <img src="ralp_in_a_cage.png" alt="Ralph in a cage" width="520">
+</p>
+
 A coding-agent **Ralph loop** kept in a cage. Every 5 minutes it pulls the latest
 code, asks the Second Brain bot API for tasks flagged "can be done by a bot", lets
 a coding agent (**Claude Code** or **OpenAI Codex**) implement each one, verifies
@@ -91,6 +95,9 @@ logins for that machine).
 | `PROJECT_API_BASE_URL` | Deployed backend URL (no trailing slash). For a backend on this host: `http://host.docker.internal:8000` |
 | `PROJECT_SLUG` / `PROJECT_TOKEN` | The project's slug + bot token |
 | `DEFAULT_AGENT` | `claude` or `codex` — which agent does the work |
+| `CHECK_INTERVAL_MINUTES` | How often to check for tasks (default `5`) |
+| `CRON_SCHEDULE` | Optional full cron expression; overrides the interval (e.g. `0 * * * *` hourly) |
+| `MAX_TASKS_PER_PASS` | Tasks worked per check: `1` (default) = one at a time; `0` = drain all |
 | `BASE_BRANCH` | Branch to pull from / target PRs at (default `master`); never pushed to |
 | `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` | Commit identity |
 | `GH_TOKEN` | GitHub token (`repo` scope) — used only to open PRs (push uses SSH) |
@@ -130,9 +137,11 @@ docker compose down                 # stop (volumes, so logins/repos, persist)
 docker compose build --no-cache     # rebuild after editing custom-setup.sh
 ```
 
-Change the cadence by editing the cron line in `entrypoint.sh` (default
-`*/5 * * * *`). Long passes are fine — `flock` makes the next tick skip while one
-is running.
+Set the cadence with `CHECK_INTERVAL_MINUTES` (or `CRON_SCHEDULE`) in `.env` —
+no need to edit any script. Long passes are fine: `loop.sh` takes a single-flight
+lock, so a tick that fires while the previous pass is still working just skips.
+With `MAX_TASKS_PER_PASS=1` (default), each check finishes one task before the
+next check can start another, so an agent is never working two tasks at once.
 
 ## Auto-start on every reboot
 
