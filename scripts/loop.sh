@@ -2,8 +2,8 @@
 #
 # The Ralph loop. One pass = sync repos, then for each configured project pull
 # the bot-doable tasks and, for each, let the chosen agent implement it, verify,
-# and either open/extend a PR (success) or post feedback (failure). Run every 5
-# minutes by cron under flock so passes never overlap.
+# and either open/extend a PR (success) or post feedback (failure). Run on the
+# configured interval by cron under flock so passes never overlap.
 #
 set -uo pipefail
 
@@ -23,7 +23,9 @@ DEFAULT_AGENT="${DEFAULT_AGENT:-claude}"
 # below, this guarantees a new task never starts while one is still in progress.
 MAX_TASKS_PER_PASS="${MAX_TASKS_PER_PASS:-1}"
 
-log() { echo "[$(date '+%F %T')] $*"; }
+# Tag every line with the project name when known (RALPH_PROJECT is set per
+# container by gen-compose.sh), so interleaved multi-project logs stay readable.
+log() { echo "[$(date '+%F %T')]${RALPH_PROJECT:+ [${RALPH_PROJECT}]} $*"; }
 
 # Single-flight: never run two passes at once — a cron tick, a manual
 # `docker compose exec ... loop.sh`, and the startup pass all share this lock. If
@@ -56,12 +58,17 @@ bot_feedback() {
         "${API}/api/v1/bot/$1/tasks/$3/feedback"
 }
 
-# ---- Projects: "slug token [agent]" from .env or /config/projects.list ------
+# ---- Project: "slug token [agent]" -----------------------------------------
+# Each runner container drives exactly ONE project: its slug/token/agent come
+# from the project's config/projects/<name>/project.env (loaded into the env via
+# docker-compose env_file). The /config/projects.list fallback is LEGACY — the
+# old single-container, multi-project mode; multi-project is now N containers
+# (see scripts/gen-compose.sh).
 load_projects() {
     if [ -n "${PROJECT_SLUG:-}" ] && [ -n "${PROJECT_TOKEN:-}" ]; then
         echo "${PROJECT_SLUG} ${PROJECT_TOKEN} ${DEFAULT_AGENT}"
     elif [ -f /config/projects.list ]; then
-        grep -vE '^\s*(#|$)' /config/projects.list
+        grep -vE '^\s*(#|$)' /config/projects.list   # legacy multi-project fallback
     fi
 }
 

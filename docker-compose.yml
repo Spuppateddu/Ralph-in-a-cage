@@ -1,6 +1,14 @@
-# Ralph runner stack. Nothing secret lives here — config comes from `.env`
-# (gitignored), and agent logins + the SSH key live in named volumes created by
-# `scripts/setup.sh`, so they persist across restarts and rebuilds.
+# LEGACY single-project stack (one `runner` + one `db`, all repos in /workspace).
+# For multiple projects — each in its own container — use the per-project layout
+# under config/projects/ and generate the stack instead:
+#
+#   scripts/gen-compose.sh
+#   docker compose -f docker-compose.generated.yml up -d
+#
+# This file still works for a single project that uses the top-level
+# config/repos.list + config/env/. Nothing secret lives here — config comes from
+# `.env` (gitignored), and agent logins + the SSH key live in named volumes
+# created by `scripts/setup.sh`, so they persist across restarts and rebuilds.
 #
 #   docker compose build
 #   docker compose up -d

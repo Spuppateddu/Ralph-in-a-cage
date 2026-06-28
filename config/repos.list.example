@@ -1,6 +1,11 @@
+# LEGACY (single-project layout). For the recommended per-project layout, put
+# this file at config/projects/<name>/repos.list instead — see
+# config/projects/example/. This top-level file is only used by the legacy
+# docker-compose.yml stack.
+#
 # Repositories that make up your project. Copy to `config/repos.list`
 # (gitignored) and list one SSH clone URL per line. All repos belong to the same
-# project. Technology (Laravel / Next.js) is auto-detected after cloning.
+# project. Technology (Laravel / Next.js / Convex) is auto-detected after cloning.
 #
 # Lines starting with # and blank lines are ignored.
 #

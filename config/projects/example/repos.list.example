@@ -1,0 +1,9 @@
+# Repositories that make up THIS project. Copy to `repos.list` (gitignored) and
+# list one SSH clone URL per line. All repos here belong to this one project and
+# are cloned into this project's runner /workspace. Technology (Laravel /
+# Next.js / Convex) is auto-detected after cloning.
+#
+# Lines starting with # and blank lines are ignored.
+#
+# git@github.com:you/your-project-backend.git
+# git@github.com:you/your-project-frontend.git

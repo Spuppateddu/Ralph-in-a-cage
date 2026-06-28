@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 #
-# One-time interactive setup, run INSIDE the container:
+# One-time interactive setup, run INSIDE a project's runner container:
 #
-#     docker compose exec -it runner /scripts/setup.sh
+#     docker compose -f docker-compose.generated.yml exec -it runner-<project> /scripts/setup.sh
 #
 # Does the things that need you in the loop, persisting them to Docker volumes so
-# you only do this once per machine:
+# you only do this once (per machine in shared mode; per project in detached mode):
 #   1. SSH key for GitHub (generate + show the public key to add to GitHub)
 #   2. Log in to a chosen coding agent (Claude Code and/or OpenAI Codex)
 #   3. Clone the project repos from /config/repos.list
-#   4. Install each repo's toolchain (Laravel/Next.js, auto-detected)
+#   4. Install each repo's toolchain (Laravel/Next.js/Convex, auto-detected)
+#
+# In shared mode the SSH key + agent logins live in volumes shared by every
+# project's runner, so steps 1-2 only need doing in the first container; later
+# containers detect the existing key/login and skip straight to clone + install.
 #
 set -uo pipefail
 
@@ -107,14 +111,18 @@ for dir in "$WORKSPACE"/*/; do
         laravel)
             # Provide .env first so the app can boot during install (see verify.sh).
             provision_laravel_env "$dir"
+            ensure_db_schema   # make sure this project's schema exists
             ( cd "$dir" && composer install --no-interaction --prefer-dist --no-progress ) || true
             ( cd "$dir" && php artisan key:generate --force >/dev/null 2>&1 ) || true ;;
+        convex)
+            ( cd "$dir" && npm install && npx --no-install convex codegen ) || true ;;
         nextjs)  ( cd "$dir" && npm install ) || true ;;
         *)       echo "    (unknown tech — skipping dependency install)" ;;
     esac
 done
 
 hr
-echo "Setup complete. The loop runs every 5 minutes."
-echo "Watch it with:  docker compose logs -f runner"
-echo "Run one pass now:  docker compose exec runner /scripts/loop.sh"
+svc="runner-${RALPH_PROJECT:-<project>}"
+echo "Setup complete for project '${RALPH_PROJECT:-<project>}'. The loop runs on your configured interval."
+echo "Watch it with:    docker compose -f docker-compose.generated.yml logs -f ${svc}"
+echo "Run one pass now:  docker compose -f docker-compose.generated.yml exec ${svc} /scripts/loop.sh"

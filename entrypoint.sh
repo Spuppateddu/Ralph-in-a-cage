@@ -6,7 +6,7 @@
 #
 set -uo pipefail
 
-echo "[entrypoint] starting Ralph runner"
+echo "[entrypoint] starting Ralph runner${RALPH_PROJECT:+ for project '${RALPH_PROJECT}'}"
 
 # --- Git identity + safety --------------------------------------------------
 git config --global user.name  "${GIT_AUTHOR_NAME:-Ralph Bot}"

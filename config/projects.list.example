@@ -1,8 +1,12 @@
-# Multiple-projects config. Copy to `config/projects.list` (gitignored) and add
-# one project per line as: <slug> <token>
-# Lines starting with # and blank lines are ignored.
+# LEGACY — pre per-project-container multi-project mode (one container fanning
+# out across several projects' task APIs). It still works, but the recommended
+# way to run multiple projects is now ONE runner container per project: create a
+# config/projects/<name>/ directory (copy config/projects/example/) and generate
+# the stack with scripts/gen-compose.sh. See the README "Multiple projects".
 #
-# Only used when PROJECT_SLUG/PROJECT_TOKEN are empty in .env.
+# Legacy format: copy to `config/projects.list` (gitignored), one line per
+# project as: <slug> <token> [agent]. Only used when PROJECT_SLUG/PROJECT_TOKEN
+# are empty. Lines starting with # and blank lines are ignored.
 #
 # my-first-project-ab3x9   abcdef0123456789...token...
-# another-project-qz7k1    fedcba9876543210...token...
+# another-project-qz7k1    fedcba9876543210...token...   codex
