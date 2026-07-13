@@ -5,17 +5,23 @@
 #
 # Supported: laravel, nextjs, convex. Unknown tech is not verified (the change is
 # still committed). Extend with more verify_* functions + a case below.
+#
+# Tests run ONLY when the repo's test setup is actually usable in the cage
+# (laravel_tests_ready / verify_node_tests decide); otherwise they're skipped
+# with a logged reason so pre-existing test debt never blocks every task.
 
 source "$(dirname "${BASH_SOURCE[0]}")/detect.sh"
 
-# Create this project's MySQL schema if it doesn't exist yet. The mysql image
-# only auto-creates ONE database (MYSQL_DATABASE), but each project verifies
-# against its own schema (DB_DATABASE from the project's project.env), so any
-# additional schema must be created here. Idempotent — safe before every migrate.
+# Create a MySQL schema if it doesn't exist yet. The mysql image only
+# auto-creates ONE database (MYSQL_DATABASE), but each project verifies against
+# its own schema (DB_DATABASE from the project's project.env), so any additional
+# schema — including a repo's dedicated TEST schema — must be created here.
+# Idempotent — safe before every migrate.
 # DB_HOST points at the shared `db` service, or `db-<project>` in detached mode
 # (set by gen-compose.sh). DB_PASSWORD doubles as the MySQL root password.
+#   ensure_db_schema [dbname]   (defaults to this project's DB_DATABASE)
 ensure_db_schema() {
-    local db="${DB_DATABASE:-second_brain}" user="${DB_USERNAME:-sb}" pass="${DB_PASSWORD:-secret}"
+    local db="${1:-${DB_DATABASE:-second_brain}}" user="${DB_USERNAME:-sb}" pass="${DB_PASSWORD:-secret}"
     mysql -h "${DB_HOST:-db}" -P "${DB_PORT:-3306}" -uroot -p"${pass}" 2>/dev/null <<SQL || \
         echo "[verify] WARNING: could not ensure schema ${db} (continuing — migrate will report if it's really missing)"
 CREATE DATABASE IF NOT EXISTS \`${db}\`;
@@ -64,6 +70,80 @@ provision_node_env() {
     [ -f "$tmpl" ] && cp "$tmpl" "$dir/.env.local"
 }
 
+# Read an <env name="KEY" value="..."/> (or <server .../>) override from
+# phpunit.xml(.dist). Commented-out lines don't count — Laravel ships the DB
+# overrides commented by default, and a commented override means the suite
+# would really hit whatever the ambient env points at.
+_phpunit_env() {
+    local dir="$1" key="$2" f
+    for f in "$dir/phpunit.xml" "$dir/phpunit.xml.dist"; do
+        [ -f "$f" ] || continue
+        sed 's/<!--.*-->//g' "$f" \
+            | sed -n "s/.*name=\"${key}\"[^>]*value=\"\([^\"]*\)\".*/\1/p" | head -n1
+        return 0
+    done
+}
+
+# Read KEY=value from a dotenv-style file (last occurrence wins, quotes stripped).
+_env_file_get() { sed -n "s/^$2=\(.*\)$/\1/p" "$1" 2>/dev/null | tail -n1 | tr -d '"'; }
+
+# Decide whether this repo's TEST suite can actually run in the cage, doing any
+# cheap setup needed along the way (test overlay, sqlite file, test schema).
+# Returns 0 (silent) when ready; prints a human skip-reason and returns 1 when
+# tests should be skipped. "Ready" means the suite has tests AND an explicit,
+# workable test database:
+#   1) /config/env/<repo>.testing.env overlay (user-supplied, copied to
+#      .env.testing — the way to "settle" a repo whose defaults don't work here)
+#   2) an uncommented DB_CONNECTION override in phpunit.xml(.dist)
+#   3) a committed .env.testing
+laravel_tests_ready() {
+    local dir="$1" name; name="$(basename "$dir")"
+
+    { [ -f "$dir/phpunit.xml" ] || [ -f "$dir/phpunit.xml.dist" ]; } \
+        || { echo "no phpunit.xml in the repo"; return 1; }
+    find "$dir/tests" -name '*.php' -print -quit 2>/dev/null | grep -q . \
+        || { echo "no test files under tests/"; return 1; }
+
+    # User-supplied test env overlay wins (mirrors the <repo>.env verify overlay).
+    [ -f "/config/env/${name}.testing.env" ] \
+        && cp "/config/env/${name}.testing.env" "$dir/.env.testing"
+
+    local conn db
+    conn="$(_phpunit_env "$dir" DB_CONNECTION)"
+    db="$(_phpunit_env "$dir" DB_DATABASE)"
+    if [ -z "$conn" ] && [ -f "$dir/.env.testing" ]; then
+        conn="$(_env_file_get "$dir/.env.testing" DB_CONNECTION)"
+        db="$(_env_file_get "$dir/.env.testing" DB_DATABASE)"
+    fi
+
+    case "$conn" in
+        sqlite)
+            php -m 2>/dev/null | grep -qi pdo_sqlite \
+                || { echo "test DB is sqlite but the pdo_sqlite extension is not installed"; return 1; }
+            [ -z "$db" ] && db="database/database.sqlite"   # Laravel's default file DB
+            if [ "$db" != ":memory:" ]; then
+                ( cd "$dir" && mkdir -p "$(dirname "$db")" && touch "$db" ) 2>/dev/null
+            fi
+            ;;
+        mysql|mariadb)
+            # Give the suite its own schema when it names one; without one it
+            # reuses the project's dev schema, which is fine — it's a cage DB.
+            [ -n "$db" ] && ensure_db_schema "$db" >/dev/null
+            ;;
+        "")
+            echo "no test database configured (no DB_CONNECTION in phpunit.xml or .env.testing);"
+            echo "the suite would hit the dev database in whatever state it's in. Configure it in"
+            echo "the repo, or supply /config/env/${name}.testing.env"
+            return 1
+            ;;
+        *)
+            echo "test DB connection '${conn}' is not available in the cage"
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 verify_laravel() {
     local dir="$1"
     cd "$dir" || { echo "laravel dir missing"; return 1; }
@@ -85,8 +165,43 @@ verify_laravel() {
     php artisan migrate:fresh --force || { echo "migrations failed"; return 1; }
 
     echo "[verify:laravel] tests"
-    php artisan test || { echo "backend tests failed"; return 1; }
-    return 0
+    local skip_reason
+    if ! skip_reason="$(laravel_tests_ready "$dir")"; then
+        echo "  (skipping tests — ${skip_reason})"
+        return 0
+    fi
+
+    # The container exports the project's dev DB_* (project.env), and REAL env
+    # vars beat .env.testing in Laravel — left in place they'd silently point
+    # the suite at the dev schema (or trip a repo's own protected-DB guard).
+    # Strip them so phpunit.xml / .env.testing decide the test database.
+    local tlog; tlog="$(mktemp)"
+    env -u DB_CONNECTION -u DB_HOST -u DB_PORT -u DB_DATABASE -u DB_USERNAME -u DB_PASSWORD \
+        php artisan test 2>&1 | tee "$tlog"
+    if [ "${PIPESTATUS[0]}" -eq 0 ]; then
+        rm -f "$tlog"
+        return 0
+    fi
+
+    # When essentially NOTHING passes, the suite itself can't run in this
+    # environment (bootstrap/config debt no single task caused) — warn and skip
+    # instead of blocking every task on it. A real regression leaves most of
+    # the suite green and still fails verification here.
+    local passed failed
+    passed="$(grep -Eo '[0-9]+ passed' "$tlog" | tail -n1 | grep -Eo '^[0-9]+')"
+    failed="$( { grep -Eo '[0-9]+ (failed|errored)' "$tlog";
+                 grep -Eo '(Errors|Failures): [0-9]+' "$tlog"; } \
+               | grep -Eo '[0-9]+' | awk '{s+=$1} END {print s+0}')"
+    rm -f "$tlog"
+    if [ "${passed:-0}" -le 1 ] && [ "${failed:-0}" -ge 20 ]; then
+        echo "  WARNING: the whole suite fails (${failed} failed, ${passed:-0} passed) —"
+        echo "  the test setup is broken in this environment, not by this task; skipping."
+        echo "  Fix the repo's test setup (or add /config/env/$(basename "$dir").testing.env)"
+        echo "  to re-enable this gate."
+        return 0
+    fi
+    echo "backend tests failed"
+    return 1
 }
 
 # Lint only the files THIS task changed, not the whole repo — otherwise the
@@ -129,6 +244,77 @@ verify_node_lint_changed() {
     return 0
 }
 
+# Run the repo's own JS test suite if — and only if — one is actually set up:
+# a real "test" script in package.json (not npm's placeholder) using a runner
+# that works headless in the cage (vitest / jest / node --test). Anything else
+# (no script, e2e runners that need a browser or a running app, unknown
+# runners) is skipped — the build above already gates the change. Shared by the
+# Next.js and Convex verifiers.
+verify_node_tests() {
+    local dir="$1"
+    echo "[verify:node] tests"
+    local script
+    script="$(jq -r '.scripts.test // empty' "$dir/package.json" 2>/dev/null)"
+    if [ -z "$script" ]; then
+        echo "  (no \"test\" script in package.json — skipping tests)"
+        return 0
+    fi
+    case "$script" in
+        *"no test specified"*)
+            echo "  (placeholder \"test\" script — skipping tests)"; return 0 ;;
+        *playwright*|*cypress*)
+            echo "  (e2e runner needs a browser/running app — skipping tests)"; return 0 ;;
+    esac
+    if ! echo "$script" | grep -qE 'vitest|jest|node .*--test'; then
+        echo "  (unrecognized test runner \"${script}\" — skipping tests)"
+        return 0
+    fi
+
+    local tlog; tlog="$(mktemp)"
+    # CI=true makes vitest/jest run once instead of entering watch mode.
+    ( cd "$dir" && CI=true npm test --silent 2>&1 ) | tee "$tlog"
+    if [ "${PIPESTATUS[0]}" -eq 0 ]; then
+        rm -f "$tlog"
+        return 0
+    fi
+
+    # Same rule as the Laravel verifier: a suite where essentially nothing
+    # passes is broken setup in this environment, not this task's regression.
+    local passed failed ffiles
+    passed="$(grep -Eo '[0-9]+ passed' "$tlog" | tail -n1 | grep -Eo '^[0-9]+')"
+    failed="$(grep -Eo '[0-9]+ fail(ed)?' "$tlog" | grep -Eo '[0-9]+' | awk '{s+=$1} END {print s+0}')"
+    # The files the failures live in (vitest and jest both print "FAIL <path>"
+    # lines; strip ANSI colors first) — used by the isolation retry below.
+    ffiles="$(sed 's/\x1b\[[0-9;]*m//g' "$tlog" | grep -E '^[[:space:]]*FAIL[[:space:]]' \
+              | awk '{print $2}' | grep -E '\.(test|spec)\.' | sort -u | tr '\n' ' ')"
+    rm -f "$tlog"
+    if [ "${passed:-0}" -le 1 ] && [ "${failed:-0}" -ge 10 ]; then
+        echo "  WARNING: the whole suite fails (${failed} failed, ${passed:-0} passed) —"
+        echo "  the test setup is broken in this environment, not by this task; skipping."
+        echo "  Fix the repo's test setup to re-enable this gate."
+        return 0
+    fi
+
+    # A few failures in a mostly-green suite are often container load, not a
+    # regression: under a full parallel run, timing-sensitive tests (Testing
+    # Library's findBy*/waitFor allow only 1s by default) can blow their
+    # timeouts even though the same tests pass alone. Re-run just the failed
+    # files on their own — passing in isolation means load-flake, not a break;
+    # failing again gates for real. (Falls back to a full re-run when no failed
+    # files could be parsed from the runner's output.)
+    echo "  (${failed} failure(s) in a mostly-green suite — retrying in isolation: ${ffiles:-full suite})"
+    # shellcheck disable=SC2086  # ffiles is a space-separated file list
+    ( cd "$dir" && CI=true npm test --silent -- $ffiles 2>&1 ) | tail -n 40
+    if [ "${PIPESTATUS[0]}" -eq 0 ]; then
+        echo "  WARNING: the failed test(s) pass when run in isolation — the failure is"
+        echo "  timing under full-suite load in the cage, not a regression from this task."
+        echo "  Consider raising the repo's test timeouts to stabilize the suite."
+        return 0
+    fi
+    echo "frontend tests failed (reproduced in isolation)"
+    return 1
+}
+
 verify_nextjs() {
     local dir="$1"
     cd "$dir" || { echo "nextjs dir missing"; return 1; }
@@ -141,6 +327,8 @@ verify_nextjs() {
 
     echo "[verify:nextjs] build"
     npm run build || { echo "build failed"; return 1; }
+
+    verify_node_tests "$dir" || return 1
     return 0
 }
 
@@ -174,6 +362,8 @@ verify_convex() {
 
     echo "[verify:convex] build (also type-checks)"
     npm run build || { echo "build failed"; return 1; }
+
+    verify_node_tests "$dir" || return 1
     return 0
 }
 

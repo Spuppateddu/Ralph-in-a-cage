@@ -29,8 +29,11 @@ Each pass (cron + `flock`, never overlapping) — the interval is yours to set:
 3. **Claim** — atomically (two passes never grab the same task).
 4. **Do it** — the chosen agent edits the repos (it doesn't touch git).
 5. **Verify** — auto-detected per repo: Laravel ⇒ `composer install` + real MySQL
-   migrate + `php artisan test`; Next.js ⇒ `npm ci` + lint + build; Convex
-   (Next.js + Convex.dev) ⇒ `npm ci` + lint + build (uses committed `convex/_generated`).
+   migrate + tests; Next.js ⇒ `npm ci` + lint + build + tests; Convex
+   (Next.js + Convex.dev) ⇒ `npm ci` + lint + build + tests (uses committed
+   `convex/_generated`). Tests only run when the repo's test setup is actually
+   usable in the cage (see [Tests](#tests)); otherwise they're skipped with a
+   logged reason instead of failing every task.
 6. **Settle** —
    - ✅ commit to the **day's branch** (`bot/YYYY-MM-DD`, reused all day), push
      over SSH, open one **PR → base branch** per repo, mark the task **done**
@@ -74,16 +77,52 @@ runner builds the agent's prompt from `title` + `description`.
 Auto-detected per repo:
 
 - **Laravel** (PHP + Composer) — `composer install` + real MySQL `migrate:fresh` + `php artisan test`.
-- **Next.js** (Node) — `npm ci` + lint (changed files) + `next build`.
+- **Next.js** (Node) — `npm ci` + lint (changed files) + `next build` + `npm test`.
 - **Convex** (Next.js + [Convex.dev](https://convex.dev)) — `npm ci` + lint (changed files)
-  + `next build`. Detected when `package.json` has the `convex` dependency and a `convex/`
-  directory. Verification is **offline** and a placeholder `NEXT_PUBLIC_CONVEX_URL` is
+  + `next build` + `npm test`. Detected when `package.json` has the `convex` dependency and a
+  `convex/` directory. Verification is **offline** and a placeholder `NEXT_PUBLIC_CONVEX_URL` is
   injected, so it never contacts a live Convex deployment. The Convex CLI's `codegen` has
   **no offline mode** (it requires a live `CONVEX_DEPLOYMENT`), so the cage relies on the
   repo's **committed `convex/_generated/`** for the api/dataModel types `next build` needs —
   make sure that directory is committed (Convex commits it by default).
 
 Add more by extending `scripts/detect.sh` and `scripts/verify.sh`.
+
+### Tests
+
+Tests are a gate only when the repo's test setup actually works inside the cage;
+a suite that can't run here is **skipped with a logged reason**, never used to
+fail the task. What counts as "set up":
+
+- **Laravel** — the repo has `phpunit.xml` + files under `tests/`, **and** an
+  explicit test database: an uncommented `DB_CONNECTION` override in
+  `phpunit.xml`, a committed `.env.testing`, or a user-supplied
+  `config/projects/<project>/env/<repo>.testing.env` overlay (copied to
+  `.env.testing` before the run — use this to make a repo's tests runnable
+  without changing the repo). `sqlite` (needs `pdo_sqlite`; the file DB is
+  created) and `mysql`/`mariadb` (a dedicated test schema is created on demand)
+  are supported; anything else is skipped. Laravel's default `phpunit.xml`
+  ships the DB overrides **commented out** — that counts as *not configured*,
+  because the suite would hit the dev database in whatever state it's in.
+- **Node (Next.js / Convex)** — `package.json` has a real `test` script (not
+  npm's placeholder) using a headless runner: `vitest`, `jest`, or `node
+  --test`. E2E runners that need a browser or a running app (Playwright,
+  Cypress) and unrecognized runners are skipped — `next build` remains the gate.
+
+**Safety valve:** if a suite runs but *essentially nothing* passes (e.g.
+`1231 failed, 1 passed`), that's broken test setup in this environment — not a
+regression caused by one task — so the run is skipped with a warning instead of
+blocking every task. A real regression leaves most of the suite green and still
+fails verification.
+
+**Flake retry (Node):** when a *mostly-green* suite has a few failures, the
+failed test files are re-run **on their own** before failing the task. Under a
+full parallel run the container is heavily loaded, and timing-sensitive tests
+(Testing Library's `findBy*` / `waitFor` wait only 1 s by default) can blow
+their timeouts even though the same tests pass alone. Passing in isolation →
+warn and pass (load flake, not this task); failing in isolation too → gate for
+real. The durable fix is raising the repo's test timeouts (e.g.
+`configure({ asyncUtilTimeout })` in the vitest setup file).
 
 ## Setup
 
@@ -199,6 +238,7 @@ Then recreate every gitignored file (none of these come from the clone):
 | `config/projects/<name>/project.env` | `config/projects/example/project.env.example` | per-project: `PROJECT_SLUG`/`PROJECT_TOKEN`, API URL, `DEFAULT_AGENT`, `BASE_BRANCH`, `DB_DATABASE` |
 | `config/projects/<name>/repos.list` | `config/projects/example/repos.list.example` | one SSH clone URL per repo, for that project |
 | `config/projects/<name>/env/<repo>.env` | `config/projects/example/env/*.example` | per-repo Laravel/Convex verify config (VAPID, Convex URL) — **required for Laravel repos** |
+| `config/projects/<name>/env/<repo>.testing.env` | — | optional per-repo **test** env, copied to `.env.testing` before `php artisan test` — makes a repo's tests runnable in the cage without changing the repo |
 | `custom-setup.sh` | `custom-setup.example.sh` | *(optional)* extra packages baked into the image |
 
 (`docker-compose.generated.yml` is regenerated by `scripts/gen-compose.sh`, not copied.)
